@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-# Konstanta dari Notebook
+# Constants from Notebook
 CHANNEL_NAMES = ["smc", "smd", "vib_table", "vib_spindle", "ae_table", "ae_spindle"]
 SIGNAL_LENGTH = 9000
 FEATURE_CLIP = 1_000_000.0
@@ -72,7 +72,7 @@ def compute_channel_features(sig, prefix):
 
 def extract_features_from_signals(signals, metadata=None):
     if len(signals) != len(CHANNEL_NAMES):
-        raise ValueError(f"Jumlah sinyal harus {len(CHANNEL_NAMES)}, tapi dapat {len(signals)}")
+        raise ValueError(f"Number of signals must be {len(CHANNEL_NAMES)}, but received {len(signals)}")
 
     feats = {}
     for ch, sig in zip(CHANNEL_NAMES, signals):

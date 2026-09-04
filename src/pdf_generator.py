@@ -4,7 +4,7 @@ from datetime import datetime
 
 def generate_pdf_report(data: dict, output_dir: Path) -> Path:
     """
-    data: dict berisi hasil prediksi, contoh:
+    data: dict containing prediction results, example:
     {
         "timestamp": "...", "predicted_vb": 0.24, "threshold": 0.18,
         "probability": 0.85, "status": "CRITICAL", "run_id": "1_1"
@@ -56,11 +56,11 @@ def generate_pdf_report(data: dict, output_dir: Path) -> Path:
     pdf.set_font("Helvetica", "", 12)
     
     if data["status"] == "CRITICAL":
-        rec = "Segera hentikan mesin dan lakukan penggantian mata pisau (tool replacement). Lakukan inspeksi menyeluruh."
+        rec = "Immediately stop the machine and perform tool replacement. Perform thorough inspection."
     elif data["status"] == "WARNING":
-        rec = "Pantau kondisi mesin secara ketat. Siapkan mata pisau pengganti untuk pergantian terjadwal."
+        rec = "Monitor machine condition closely. Prepare replacement tools for scheduled replacement."
     else:
-        rec = "Mesin beroperasi dalam kondisi normal. Lanjutkan monitoring rutin."
+        rec = "Machine is operating in normal condition. Continue routine monitoring."
         
     pdf.multi_cell(0, 6, rec)
 
