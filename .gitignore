@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pkl
+reports/*.pdf
+!.gitkeep
+.env
