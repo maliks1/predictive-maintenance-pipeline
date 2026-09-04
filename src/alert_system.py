@@ -1,10 +1,11 @@
-import smtplib
 import os
+import smtplib
+from email import encoders
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
 from pathlib import Path
+
 
 def send_email_alert(subject: str, body: str, attachment_path: Path):
     # Configuration from Environment Variables
@@ -30,7 +31,7 @@ def send_email_alert(subject: str, body: str, attachment_path: Path):
         with open(attachment_path, "rb") as attachment:
             part = MIMEBase('application', 'octet-stream')
             part.set_payload(attachment.read())
-        
+
         encoders.encode_base64(part)
         part.add_header(
             'Content-Disposition',

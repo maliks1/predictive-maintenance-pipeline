@@ -4,46 +4,50 @@ Automated Predictive Maintenance Pipeline
 Daily inference + reporting + email alert.
 """
 
-import os
-import sys
 import json
 import logging
-from pathlib import Path
+import os
+import sys
 from datetime import datetime
+from pathlib import Path
 
 import joblib
 import numpy as np
 import pandas as pd
 
-# External modules (already created separately)
+# Local modules live in src/
+SRC_DIR = Path(__file__).resolve().parent / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from alert_system import send_email_alert
 from data_loader import load_daily_sensor_data
 from feature_extraction import extract_features_from_signals
-from pdf_report import generate_pdf_report
-from email_alert import send_email_alert
+from pdf_generator import generate_pdf_report
 
 # ==================================================
-# 1. LOGGING
+# 1. CONFIGURATION
+# ==================================================
+# Path (can be overridden via env)
+MODEL_PATH = Path(os.getenv("MODEL_PATH", "notebooks/models/random_forest_model.pkl"))
+DATA_PATH = Path(os.getenv("DATA_PATH", "data/daily/mill.mat"))
+REPORT_DIR = Path(os.getenv("REPORT_DIR", "reports"))
+LOG_DIR = Path(os.getenv("LOG_DIR", "logs"))
+REPORT_DIR.mkdir(parents=True, exist_ok=True)
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+# ==================================================
+# 2. LOGGING
 # ==================================================
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("logs/pipeline.log", encoding="utf-8"),
+        logging.FileHandler(LOG_DIR / "pipeline.log", encoding="utf-8"),
     ],
 )
 log = logging.getLogger("main_pipeline")
-
-# ==================================================
-# 2. CONFIGURATION
-# ==================================================
-# Path (can be overridden via env)
-MODEL_PATH = Path(os.getenv("MODEL_PATH", "notebooks/models/rf_tool_wear_model.pkl"))
-DATA_PATH = Path(os.getenv("DATA_PATH", "data/daily/mill.mat"))
-REPORT_DIR = Path(os.getenv("REPORT_DIR", "reports"))
-LOG_DIR = Path(os.getenv("LOG_DIR", "logs"))
-REPORT_DIR.mkdir(parents=True, exist_ok=True)
-LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # Email (required from env / GitHub Secrets)
 SMTP_EMAIL = os.getenv("SMTP_EMAIL")
@@ -171,7 +175,15 @@ def main() -> int:
 
         # 5. If critical / warning -> generate PDF & send email
         if status in ("CRITICAL", "WARNING"):
-            pdf_path = generate_pdf_report(result)
+            pdf_data = {
+                "timestamp": result["timestamp"],
+                "run_id": result["run_id"],
+                "predicted_vb": result["predicted_vb_mm"],
+                "threshold": result["threshold_mm"],
+                "probability": result["failure_probability"] or 0.0,
+                "status": status,
+            }
+            pdf_path = generate_pdf_report(pdf_data, REPORT_DIR)
             result["pdf_path"] = str(pdf_path)
             log.info(f"PDF report created: {pdf_path}")
 

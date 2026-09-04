@@ -1,6 +1,8 @@
-from fpdf import FPDF
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+
+from fpdf import FPDF
+
 
 def generate_pdf_report(data: dict, output_dir: Path) -> Path:
     """
@@ -16,12 +18,12 @@ def generate_pdf_report(data: dict, output_dir: Path) -> Path:
 
     pdf = FPDF()
     pdf.add_page()
-    
+
     # Header
     pdf.set_font("Helvetica", "B", 16)
     pdf.cell(0, 10, "PREDICTIVE MAINTENANCE ALERT", ln=True, align="C")
     pdf.ln(5)
-    
+
     pdf.set_font("Helvetica", "", 12)
     pdf.cell(0, 10, f"Generated: {data.get('timestamp', datetime.now().isoformat())}", ln=True, align="C")
     pdf.ln(10)
@@ -41,7 +43,7 @@ def generate_pdf_report(data: dict, output_dir: Path) -> Path:
         ("Critical Threshold", f"{data['threshold']:.2f} mm"),
         ("Failure Probability", f"{data['probability']*100:.2f}%"),
     ]
-    
+
     for label, value in details:
         pdf.set_font("Helvetica", "B", 12)
         pdf.cell(90, 8, label)
@@ -49,19 +51,19 @@ def generate_pdf_report(data: dict, output_dir: Path) -> Path:
         pdf.cell(0, 8, value, ln=True)
 
     pdf.ln(10)
-    
+
     # Recommendation
     pdf.set_font("Helvetica", "B", 12)
     pdf.cell(0, 8, "Recommendation:", ln=True)
     pdf.set_font("Helvetica", "", 12)
-    
+
     if data["status"] == "CRITICAL":
         rec = "Immediately stop the machine and perform tool replacement. Perform thorough inspection."
     elif data["status"] == "WARNING":
         rec = "Monitor machine condition closely. Prepare replacement tools for scheduled replacement."
     else:
         rec = "Machine is operating in normal condition. Continue routine monitoring."
-        
+
     pdf.multi_cell(0, 6, rec)
 
     pdf.output(str(pdf_path))
