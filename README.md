@@ -15,6 +15,29 @@ This pipeline monitors 6 sensor channels from a milling machine, extracts statis
 - **Daily Inference Pipeline** — Scheduled batch processing of daily sensor data
 - **Model Versioning** — Trained models exported with full metrics and metadata
 
+## Dataset
+
+This project uses the **NASA Milling Wear Dataset**, a public dataset collected from CNC milling experiments to study tool wear behavior. The dataset contains time-series sensor measurements recorded during milling operations with varying conditions.
+
+📎 **Source**: [NASA Milling Wear Dataset (data.nasa.gov)](https://data.nasa.gov/dataset/milling-wear)
+
+### Dataset Contents
+
+| Component | Description |
+|-----------|-------------|
+| **Sensor Channels** | 6 channels: Spindle Motor Current, Spindle Motor Drive, Table Vibration, Spindle Vibration, Acoustic Emission (Table), Acoustic Emission (Spindle) |
+| **Sampling Rate** | High-frequency acquisitions per machining run |
+| **Target Variable** | Flank wear (VB) measured in millimeters at regular intervals |
+| **Experimental Runs** | Multiple cases with different cutting conditions and tool wear progression |
+| **File Format** | MATLAB `.mat` file containing signal arrays and measurement labels |
+
+### Usage Notes
+
+- The dataset is publicly available for research and educational purposes
+- Raw signals are preprocessed and segmented into daily batches for inference
+- Feature extraction computes 11 statistical descriptors per channel (66 features total)
+- Tool wear measurements serve as ground truth for model training and evaluation
+
 ## Architecture
 
 ### 🔧 Model Training (Notebook)
