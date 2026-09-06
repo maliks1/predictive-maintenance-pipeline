@@ -30,7 +30,7 @@ def to_scalar(value):
         if arr.size == 0:
             return np.nan
         return float(arr.reshape(-1)[0])
-    except Exception:
+    except (TypeError, ValueError):
         return np.nan
 
 
@@ -38,7 +38,7 @@ def to_signal(value, length=SIGNAL_LENGTH):
     """Convert a MATLAB field to a 1D signal with fixed length."""
     try:
         sig = np.asarray(value, dtype=np.float64).squeeze().reshape(-1)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
     if sig.size == 0:

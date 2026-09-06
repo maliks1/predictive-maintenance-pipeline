@@ -6,3 +6,4 @@ scikit-learn
 fpdf2
 jupyter
 ipykernel
+python-dotenv

@@ -20,7 +20,7 @@ def safe_float(value):
         if not np.isfinite(value):
             return np.nan
         return float(np.clip(value, -FEATURE_CLIP, FEATURE_CLIP))
-    except Exception:
+    except (TypeError, ValueError):
         return np.nan
 
 
@@ -78,10 +78,10 @@ def extract_features_from_signals(signals, metadata=None):
 
     Args:
         signals: list of 6 arrays, each ~9000 samples long.
-        metadata: dict with keys "DOC", "Feed", "Material" (optional).
+        metadata: unused, kept for backward-compatible function signature.
 
     Returns:
-        dict with 39 features (36 signal + 3 metadata).
+        dict with 36 signal features.
     """
     if len(signals) != len(CHANNEL_NAMES):
         raise ValueError(
@@ -92,10 +92,5 @@ def extract_features_from_signals(signals, metadata=None):
     feats = {}
     for ch, sig in zip(CHANNEL_NAMES, signals):
         feats.update(compute_channel_features(sig, ch))
-
-    metadata = metadata or {}
-    feats["DOC"] = safe_float(metadata.get("DOC", np.nan))
-    feats["Feed"] = safe_float(metadata.get("Feed", np.nan))
-    feats["Material"] = safe_float(metadata.get("Material", np.nan))
 
     return feats

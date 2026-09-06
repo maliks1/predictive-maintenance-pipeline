@@ -1,23 +1,25 @@
 # Predictive Maintenance Pipeline
 
-A machine learning-based predictive maintenance system for CNC milling machines that predicts tool wear (VB - flank wear) in real time and triggers alerts when the tool requires replacement.
+A machine learning-based predictive maintenance system for CNC milling machines that predicts tool wear (VB - flank wear) and sends an alert when the tool requires replacement.
 
 ## Overview
 
-This pipeline monitors 6 sensor channels from a milling machine, extracts statistical features from vibration, acoustic emission, and spindle current signals, and uses trained Random Forest models to predict tool wear and assess failure probability. When predictions exceed safety thresholds, the system automatically generates a PDF report and sends an email alert.
+This project monitors 6 sensor channels from the NASA Milling Wear Dataset, extracts statistical features from vibration, acoustic emission, and spindle-related signals, and uses trained Random Forest models to predict flank wear and estimate failure probability. The production script loads the latest run from a daily `.mat` file, performs inference, classifies the machine status as `NORMAL` or `ALERT`, writes execution logs, and sends an HTML email alert when the replacement threshold is exceeded.
 
 ## Features
 
-- **Real-time Tool Wear Prediction** — Predicts flank wear (VB) in millimeters using a Random Forest Regressor
-- **Failure Probability Estimation** — Classifies damage risk using a Random Forest Classifier
-- **Multi-channel Signal Processing** — Extracts 6 statistical features per channel (std, rms, peak, crest, kurtosis, zero-crossing rate)
-- **Automated Alerting** — Sends email notifications with PDF reports when wear or failure probability exceeds configured thresholds
-- **Daily Inference Pipeline** — Batch processing of daily sensor data via GitHub Actions (manual trigger; cron schedule available but commented out)
-- **Model Versioning** — Trained models exported with full metrics and metadata
+- **Tool Wear Prediction** — Predicts flank wear (VB) in millimeters using a trained Random Forest Regressor
+- **Failure Probability Estimation** — Estimates tool failure probability using a Random Forest Classifier
+- **Multi-channel Signal Processing** — Processes 6 sensor channels and extracts 6 statistical features per channel
+- **Feature Alignment** — Aligns inference features with the feature columns stored in the trained model bundle
+- **Binary Alert Logic** — Uses `NORMAL` / `ALERT` status based on wear and probability thresholds
+- **HTML Email Alerting** — Sends Gmail SMTP alerts only when status is `ALERT`
+- **Manual GitHub Actions Pipeline** — Runs the inference pipeline from GitHub Actions via `workflow_dispatch`
+- **Run Logging** — Saves console/file logs and JSON run summaries under `logs/`
 
 ## Dataset
 
-This project uses the **NASA Milling Wear Dataset**, a public dataset collected from CNC milling experiments to study tool wear behavior. The dataset contains time-series sensor measurements recorded during milling operations with varying conditions.
+This project uses the **NASA Milling Wear Dataset**, a public dataset collected from CNC milling experiments to study tool wear behavior. The dataset contains time-series sensor measurements recorded during milling operations with varying cutting conditions.
 
 📎 **Source**: [NASA Milling Wear Dataset (data.nasa.gov)](https://data.nasa.gov/dataset/milling-wear)
 
@@ -26,17 +28,18 @@ This project uses the **NASA Milling Wear Dataset**, a public dataset collected 
 | Component | Description |
 |-----------|-------------|
 | **Sensor Channels** | 6 channels: Spindle Motor Current, Spindle Motor Drive, Table Vibration, Spindle Vibration, Acoustic Emission (Table), Acoustic Emission (Spindle) |
-| **Sampling Rate** | High-frequency acquisitions per machining run |
-| **Target Variable** | Flank wear (VB) measured in millimeters at regular intervals |
-| **Experimental Runs** | Multiple cases with different cutting conditions and tool wear progression |
-| **File Format** | MATLAB `.mat` file containing signal arrays and measurement labels |
+| **Sampling Length** | Each signal is normalized to 9000 samples for inference |
+| **Target Variable** | Flank wear (VB) measured in millimeters |
+| **Experimental Runs** | Multiple cases and runs with different cutting conditions and wear progression |
+| **File Format** | MATLAB `.mat` file containing a `mill` struct array |
 
 ### Usage Notes
 
-- The dataset is publicly available for research and educational purposes
-- Raw signals are preprocessed and segmented into daily batches for inference
-- Feature extraction computes 6 statistical descriptors per channel (36 signal features) plus 3 metadata features (DOC, Feed, Material) = **39 features total**
-- Tool wear measurements serve as ground truth for model training and evaluation
+- `data/mill.mat` is used as the training dataset in the notebook
+- `data/daily/mill.mat` is used by `main_pipeline.py` for daily/manual inference
+- The daily loader reads the latest run from the `mill` struct array
+- Feature extraction computes 6 statistical descriptors per channel: `std`, `rms`, `peak`, `crest`, `kurt`, and `zero_cross`
+- Total inference features: **36 signal features (6 statistics × 6 channels)**. Metadata fields (`DOC`, `Feed`, `Material`) are read from the dataset but are not used as model features.
 
 ## Architecture
 
@@ -44,109 +47,98 @@ This project uses the **NASA Milling Wear Dataset**, a public dataset collected 
 
 ```mermaid
 flowchart LR
-    A[📦 NASA Milling Dataset<br/>mill.mat] --> B[🔍 Feature Extraction<br/>39 features: 36 signal + 3 metadata]
-    B --> C[🔀 GroupShuffleSplit<br/>by Case_Run]
-    C --> D1[🌲 RandomForestRegressor<br/>Predict VB mm]
-    C --> D2[🌲 RandomForestClassifier<br/>Failure Probability]
+    A["NASA Milling Dataset\ndata/mill.mat"] --> B["Feature Extraction\n36 signal features"]
+    B --> C["Train/Test Split\nby machining run/case"]
+    C --> D1["RandomForestRegressor\nPredict VB mm"]
+    C --> D2["RandomForestClassifier\nFailure Probability"]
 
-    D1 --> E1[📊 MAE · RMSE · R²<br/>Precision · Recall · F1]
-    D2 --> E2[📊 AUC · Precision<br/>Recall · F1]
+    D1 --> E1["Regression Metrics\nMAE · RMSE · R²"]
+    D2 --> E2["Classification Metrics\nPrecision · Recall · F1"]
 
-    E1 --> F[💾 Export Bundle<br/>random_forest_model.pkl]
+    E1 --> F["Export Model Bundle\nnotebooks/models/random_forest_model.pkl"]
     E2 --> F
-    
-    style A fill:#4a90e2,stroke:#2c5282,color:#fff
-    style F fill:#48bb78,stroke:#276749,color:#fff
-    style D1 fill:#ed8936,stroke:#c05621,color:#fff
-    style D2 fill:#ed8936,stroke:#c05621,color:#fff
 ```
 
 ### ⚙️ Daily Inference Pipeline (Production)
 
 ```mermaid
 flowchart TD
-    START([⚙️ GitHub Actions<br/>Manual Trigger]) --> LOAD[📥 Load Model Bundle<br/>random_forest_model.pkl]
-    LOAD --> DATA[📡 Load Daily Sensor Data<br/>6 channel × 9000 samples]
-    DATA --> FE[🔍 Extract Features<br/>39 statistical features]
-    FE --> PRED[🤖 Inference<br/>Regressor + Classifier]
-    
-    PRED --> DECISION{🎯 Status Decision<br/>VB > threshold_mm<br/>OR Prob ≥ alert_prob_threshold}
-    
-    DECISION -->|VB ≤ threshold & Prob < alert_prob| NORMAL[✅ NORMAL<br/>Log only]
-    DECISION -->|VB > threshold OR Prob ≥ alert_prob| ALERT[🚨 ALERT<br/>Tool requires replacement]
-    
-    ALERT --> REPORT[📄 Generate PDF Report]
-    
-    REPORT --> EMAIL[📧 Send Email Alert<br/>SMTP Gmail + Attachment]
-    EMAIL --> DONE([✔️ Pipeline Complete<br/>Save run_summary.json])
+    START(["GitHub Actions\nManual Trigger\nor local run"]) --> LOAD["Load Model Bundle\nrandom_forest_model.pkl"]
+    LOAD --> DATA["Load Daily Sensor Data\ndata/daily/mill.mat"]
+    DATA --> FE["Extract Features\n36 aligned features"]
+    FE --> PRED["Inference\nRegressor + Classifier"]
+
+    PRED --> DECISION{"Status Decision\nVB > threshold_mm\nOR probability >= alert_prob_threshold"}
+
+    DECISION -->|Safe| NORMAL["NORMAL\nLog only"]
+    DECISION -->|Threshold exceeded| ALERT["ALERT\nTool requires replacement"]
+
+    ALERT --> EMAIL["Send HTML Email Alert\nGmail SMTP"]
+    EMAIL --> DONE(["Save run summary\nlogs/run_*.json"])
     NORMAL --> DONE
-    
-    style START fill:#6b46c1,stroke:#44337a,color:#fff
-    style NORMAL fill:#48bb78,stroke:#276749,color:#fff
-    style ALERT fill:#e53e3e,stroke:#9b2c2c,color:#fff
-    style DONE fill:#48bb78,stroke:#276749,color:#fff
-    style DECISION fill:#ed8936,stroke:#c05621,color:#fff
 ```
 
 ### 🔐 Secret Management
 
 ```mermaid
 flowchart LR
-    subgraph GitHub["🔐 GitHub Repository"]
-        SECRETS[GitHub Secrets<br/>SMTP_EMAIL<br/>SMTP_PASSWORD<br/>ALERT_EMAIL_TO]
+    subgraph GitHub[GitHub Repository]
+        SECRETS["GitHub Secrets\nSMTP_EMAIL\nSMTP_PASSWORD\nALERT_EMAIL_TO"]
     end
-    
-    subgraph Actions["⚙️ GitHub Actions Runner"]
+
+    subgraph Actions[GitHub Actions Runner]
         ENV[Environment Variables]
         PIPELINE[main_pipeline.py]
     end
-    
-    subgraph External["🌐 External Services"]
-        GMAIL[📧 Gmail SMTP<br/>port 587]
-        TEAM[👥 Maintenance Team]
+
+    subgraph External[External Services]
+        GMAIL["Gmail SMTP\nsmtp.gmail.com:587"]
+        TEAM[Maintenance Recipient]
     end
-    
+
     SECRETS -->|injected at runtime| ENV
     ENV --> PIPELINE
-    PIPELINE -->|authenticated| GMAIL
-    GMAIL -->|alert + PDF| TEAM
-    
-    style SECRETS fill:#2d3748,stroke:#1a202c,color:#fff
-    style GMAIL fill:#e53e3e,stroke:#9b2c2c,color:#fff
-    style TEAM fill:#4a90e2,stroke:#2c5282,color:#fff
+    PIPELINE -->|authenticated SMTP| GMAIL
+    GMAIL -->|HTML alert email| TEAM
 ```
 
 ## Project Structure
 
 ```
 predictive-maintenance-pipeline/
-├── main_pipeline.py          # Main inference pipeline orchestrator
-├── requirements.txt          # Python dependencies
-├── README.md                 # This file
+├── main_pipeline.py                  # Main inference pipeline orchestrator
+├── requirements.txt                  # Python dependencies
+├── README.md                         # Project documentation
+├── .env                              # Local environment variables (ignored by Git)
+├── .gitignore                        # Git ignore rules
+├── .github/
+│   └── workflows/
+│       └── manual_pipeline.yml       # Manual GitHub Actions workflow
 ├── data/
-│   ├── mill.mat              # MATLAB training dataset (6 sensor channels)
-│   └── daily/                # Directory for daily sensor data files
+│   ├── mill.mat                      # MATLAB training dataset
+│   └── daily/
+│       ├── .gitkeep                  # Keeps daily data directory in Git
+│       └── mill.mat                  # Daily/manual inference input
 ├── notebooks/
-│   ├── model_training.ipynb  # Model training & evaluation notebook
+│   ├── model_training.ipynb          # Model training and evaluation notebook
 │   └── models/
-│       └── random_forest_model.pkl  # Trained model bundle (exported)
+│       └── random_forest_model.pkl   # Trained model bundle
 ├── src/
-│   ├── alert_system.py        # Email alert system
-│   ├── data_loader.py         # MATLAB .mat data loading
-│   ├── feature_extraction.py  # Signal feature extraction functions
-│   └── pdf_generator.py       # PDF report generation
-├── reports/                  # Generated PDF alert reports
-├── logs/                     # Pipeline logs & run summaries
-└── .github/workflows/
-    └── daily_pipeline.yml    # GitHub Actions cron workflow
+│   ├── alert_system.py               # HTML email alert system
+│   ├── data_loader.py                # MATLAB .mat daily data loader
+│   └── feature_extraction.py         # Signal feature extraction functions
+├── reports/
+│   └── .gitkeep                      # Reserved output directory
+└── logs/                             # Pipeline logs and JSON run summaries
 ```
 
 ## Installation
 
 ### Prerequisites
 
-- Python 3.9+
-- pip or conda
+- Python 3.9+ recommended; GitHub Actions uses Python 3.10
+- `pip` or `conda`
+- Gmail App Password if email alerts are enabled
 
 ### Setup
 
@@ -167,36 +159,38 @@ pip install -r requirements.txt
 
 | Package | Purpose |
 |---------|---------|
-| `numpy` | Numerical computations |
-| `pandas` | Data manipulation |
-| `scipy` | MATLAB file I/O (`scipy.io`) |
-| `scikit-learn` | Random Forest models, metrics |
-| `joblib` | Model serialization |
-| `fpdf2` | PDF report generation |
+| `numpy` | Numerical computations and signal arrays |
+| `pandas` | Feature row preparation and column alignment |
+| `scipy` | MATLAB `.mat` file loading via `scipy.io` |
+| `scikit-learn` | Random Forest models and preprocessing pipeline used by the model bundle |
+| `joblib` | Model bundle serialization/deserialization |
+| `fpdf2` | PDF/reporting dependency kept in requirements, currently not used by the active pipeline |
 | `jupyter` / `ipykernel` | Notebook execution |
+
+> Note: `src/alert_system.py` loads local `.env` files via `python-dotenv`. If your environment does not already include it, install it before running the pipeline or add it to `requirements.txt`.
 
 ## Configuration
 
 ### Environment Variables
 
-The following environment variables must be set before running the pipeline:
+The following environment variables can be set before running the pipeline:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `MODEL_PATH` | Path to trained model file | `notebooks/models/random_forest_model.pkl` |
-| `DATA_PATH` | Path to daily sensor data | `data/daily/mill.mat` |
-| `REPORT_DIR` | Output directory for PDF reports | `reports` |
-| `LOG_DIR` | Output directory for logs & summaries | `logs` |
-| `SMTP_EMAIL` | Sender Gmail address | _(required)_ |
-| `SMTP_PASSWORD` | Gmail App Password | _(required)_ |
-| `ALERT_EMAIL_TO` | Recipient email address | _(required)_ |
-| `ALERT_SUBJECT_PREFIX` | Email subject prefix | `[ALERT] Tool Wear Alert` |
+| `MODEL_PATH` | Path to trained model bundle | `notebooks/models/random_forest_model.pkl` |
+| `DATA_PATH` | Path to daily sensor `.mat` file | `data/daily/mill.mat` |
+| `LOG_DIR` | Output directory for logs and run summaries | `logs` |
+| `SMTP_EMAIL` | Sender Gmail address | Required for alerts |
+| `SMTP_PASSWORD` | Gmail App Password | Required for alerts |
+| `ALERT_EMAIL_TO` | Recipient email address | Required for alerts |
+
+If SMTP variables are not configured, the pipeline still runs inference and writes logs, but alert email delivery is skipped.
 
 ### Setting Up Email Alerts
 
 1. Enable 2-Step Verification on your Google Account
-2. Generate an [App Password](https://myaccount.google.com/apppasswords)
-3. Set the environment variables:
+2. Generate a [Gmail App Password](https://myaccount.google.com/apppasswords)
+3. Set the environment variables locally or configure them as GitHub repository secrets
 
 ```powershell
 # Windows PowerShell
@@ -212,6 +206,8 @@ export SMTP_PASSWORD="your-app-password"
 export ALERT_EMAIL_TO="recipient@company.com"
 ```
 
+You can also place these variables in a local `.env` file for local runs. Do not commit `.env` because it contains secrets.
+
 ## Usage
 
 ### Training the Model
@@ -226,7 +222,21 @@ Run the Jupyter Notebook to train and evaluate the model:
 jupyter notebook notebooks/model_training.ipynb
 ```
 
-Execute all cells sequentially. The trained model will be saved to `notebooks/models/random_forest_model.pkl`.
+Execute all notebook cells sequentially. The trained model bundle should be saved to:
+
+```text
+notebooks/models/random_forest_model.pkl
+```
+
+The exported bundle is expected to contain at least:
+
+- `regressor`
+- `classifier`
+- `feature_columns`
+- `channel_names`
+- `signal_length`
+- `threshold_mm`
+- `alert_prob_threshold`
 
 ### Running the Pipeline
 
@@ -239,23 +249,28 @@ python main_pipeline.py
 ```
 
 The pipeline will:
-1. Load the trained model
-2. Process daily sensor data (most recent run from the .mat file)
-3. Extract 39 features (36 signal + 3 metadata)
-4. Predict tool wear and failure probability
-5. Determine machine status (NORMAL / ALERT)
-6. Generate a PDF report and send an email alert if ALERT status
+
+1. Load the trained model bundle
+2. Load the latest run from `data/daily/mill.mat`
+3. Extract 36 statistical features from 6 sensor channels
+4. Align feature columns with the training-time model bundle
+5. Predict tool wear and failure probability
+6. Determine machine status: `NORMAL` or `ALERT`
+7. Send an HTML email alert if the status is `ALERT`
+8. Save a JSON run summary under `logs/`
 
 ### Log Output
 
-Logs are written to both console and `logs/pipeline.log`. Run summaries are saved as `logs/run_YYYYMMDD_HHMMSS.json`:
+Logs are written to the console and `logs/pipeline.log`. Run summaries are saved as `logs/run_YYYYMMDD_HHMMSS.json`:
 
-```
+```text
 2026-09-05 08:00:00 [INFO] ==================================================
 2026-09-05 08:00:00 [INFO] Predictive Maintenance Pipeline - START
 2026-09-05 08:00:00 [INFO] Model successfully loaded from notebooks/models/random_forest_model.pkl
-2026-09-05 08:00:01 [INFO] Machine Status: ALERT
-2026-09-05 08:00:01 [INFO] Alert email successfully sent.
+2026-09-05 08:00:01 [INFO] Loading sensor data: data/daily/mill.mat
+2026-09-05 08:00:01 [INFO] Features ready: 36 columns
+2026-09-05 08:00:01 [INFO] Status       : ALERT
+2026-09-05 08:00:01 [INFO] Alert HTML email successfully sent.
 ```
 
 ## Model Details
@@ -271,73 +286,94 @@ Logs are written to both console and `logs/pipeline.log`. Run summaries are save
 | 4 | `ae_table` | Acoustic Emission (Table) |
 | 5 | `ae_spindle` | Acoustic Emission (Spindle) |
 
-### Extracted Features (6 per channel = 36 signal + 3 metadata = 39 total)
+### Extracted Features (6 per channel = 36 total)
 
 Each signal channel produces these statistical features:
 
-| Feature | Formula | Significance |
-|---------|---------|--------------|
+| Feature | Formula / Meaning | Significance |
+|---------|-------------------|--------------|
 | `std` | Standard deviation | Signal variability |
-| `rms` | Root mean square | Power of the signal |
+| `rms` | Root mean square | Signal energy / power |
 | `peak` | Maximum absolute value | Peak stress indicator |
-| `crest` | peak / RMS | Impulse detection |
-| `kurt` | Excess kurtosis | Tail heaviness / outliers |
-| `zero_cross` | Zero-crossing rate | Frequency content |
+| `crest` | `peak / rms` | Impulse or spike detection |
+| `kurt` | Excess kurtosis | Tail heaviness / outlier behavior |
+| `zero_cross` | Count of sign changes around the mean | Frequency/content variation indicator |
+
+> Note: the dataset also provides metadata fields (`DOC`, `Feed`, `Material`). These are parsed by `src/data_loader.py` for informational/logging purposes only and are **not** used as model input features.
 
 ### Thresholds
 
-Thresholds are configured at training time and stored in the model bundle. They can be adjusted in the notebook before retraining.
+Thresholds are stored in the trained model bundle and loaded during inference.
 
-| Parameter | Notebook Default | Meaning |
-|-----------|-----------------|---------|
-| `threshold_mm` | 0.4 mm | Tool replacement wear limit |
-| `alert_prob_threshold` | 0.5 (50%) | Failure probability alert level |
+| Parameter | Meaning |
+|-----------|---------|
+| `threshold_mm` | Tool replacement wear limit in millimeters |
+| `alert_prob_threshold` | Failure probability level that triggers an alert |
 
 ### Status Logic (Binary)
 
 | Status | Condition | Action |
 |--------|-----------|--------|
-| **NORMAL** | Wear below threshold AND low failure probability | No action |
-| **ALERT** | Wear > threshold_mm OR failure probability ≥ alert_prob_threshold | Stop machine, replace tool, send alert |
+| **NORMAL** | `predicted_vb_mm <= threshold_mm` AND `failure_probability < alert_prob_threshold` | Continue operation, log result only |
+| **ALERT** | `predicted_vb_mm > threshold_mm` OR `failure_probability >= alert_prob_threshold` | Recommend stopping machine and replacing the tool; send HTML email alert if SMTP is configured |
 
 ## Workflow
 
 ### Training Pipeline (`model_training.ipynb`)
 
-```
-Cell 1: Import & Config          → Libraries, constants, data paths
-Cell 2: Helper Functions          → to_scalar, to_signal, safe_float, clean_features
-Cell 3: Feature Extraction        → compute_channel_features, extract_features_from_signals
-Cell 4: Load Dataset              → Parse MATLAB .mat, extract features from all runs
-Cell 5: Data Split                → GroupShuffleSplit (80/20), column alignment
-Cell 6: Train Regressor           → RandomForestRegressor (n=700, depth=14)
-Cell 7: Regression Evaluation     → MAE, RMSE, R²
-Cell 8: Alert Threshold Eval      → Precision, Recall, F1 at 0.4 mm
-Cell 9: Train Classifier          → RandomForestClassifier for failure probability
-Cell 10: Export Model             → Save bundle with metrics to .pkl
+```text
+Cell 1: Import & Config          → Libraries, constants, data/model paths
+Cell 2: Helper Functions         → Scalar/signal conversion and feature cleaning
+Cell 3: Feature Extraction       → Compute statistical features for 6 channels
+Cell 4: Load Dataset             → Parse MATLAB .mat data and build feature table
+Cell 5: Data Split               → Split training/evaluation data and align columns
+Cell 6: Train Regressor          → Train RandomForestRegressor for VB prediction
+Cell 7: Regression Evaluation    → Evaluate MAE, RMSE, and R²
+Cell 8: Threshold Evaluation     → Evaluate binary alert behavior at wear threshold
+Cell 9: Train Classifier         → Train RandomForestClassifier for failure probability
+Cell 10: Export Model            → Save trained bundle to notebooks/models/*.pkl
 ```
 
 ### Inference Pipeline (`main_pipeline.py`)
 
+```text
+Step 1: Load Model               → Validate required model bundle keys
+Step 2: Load Daily Data          → Read latest run from data/daily/mill.mat
+Step 3: Extract Features         → Build 36-feature inference row
+Step 4: Prepare Features         → Match model feature order and clean invalid values
+Step 5: Predict                  → Regressor predicts VB; classifier predicts probability
+Step 6: Status Decision          → NORMAL / ALERT binary decision
+Step 7: Send Alert               → Send HTML email only when status is ALERT
+Step 8: Save Summary             → Write logs/run_YYYYMMDD_HHMMSS.json
 ```
-Step 1: Load Model               → Validate bundle completeness
-Step 2: Load Daily Data          → Read sensor signals from .mat file
-Step 3: Extract Features         → 39 features from 6 channels + metadata
-Step 4: Predict                  → Regressor → VB (mm), Classifier → probability
-Step 5: Status Decision          → NORMAL / ALERT
-Step 6: Generate Report          → PDF with prediction details (if ALERT)
-Step 7: Send Alert               → Email with PDF attachment (if ALERT)
+
+### GitHub Actions (`manual_pipeline.yml`)
+
+The workflow is configured for manual execution from the GitHub Actions tab:
+
+```yaml
+on:
+  workflow_dispatch:
 ```
+
+Before running it in GitHub, configure these repository secrets:
+
+- `SMTP_EMAIL`
+- `SMTP_PASSWORD`
+- `ALERT_EMAIL_TO`
 
 ## Troubleshooting
 
 | Issue | Solution |
 |-------|----------|
-| `FileNotFoundError: mill.mat not found` | Ensure `data/mill.mat` exists or set `DATA_PATH` env var |
-| `Model not found` | Run `model_training.ipynb` first to generate the model file |
-| `Email sending failed` | Verify SMTP credentials; use App Password, not regular password |
-| `No valid samples extracted` | Check MATLAB file format; ensure correct field names |
-| `Infinity in features` | Signals contain non-finite values; check raw sensor data |
+| `Sensor data file not found` | Ensure `data/daily/mill.mat` exists or set `DATA_PATH` to a valid `.mat` file |
+| `Field 'mill' not found` | Use a MATLAB file with the expected NASA Milling `mill` struct array |
+| `Model not found` | Run `notebooks/model_training.ipynb` first or set `MODEL_PATH` to an existing model bundle |
+| `Model bundle is incomplete` | Re-export the model so it includes `regressor`, `classifier`, `feature_columns`, `channel_names`, `signal_length`, `threshold_mm`, and `alert_prob_threshold` |
+| `Invalid/empty signal` | Check that all 6 sensor signals exist and contain finite numeric values |
+| `Email credentials not set` | Configure `SMTP_EMAIL`, `SMTP_PASSWORD`, and `ALERT_EMAIL_TO`; use a Gmail App Password |
+| `Failed to send email` | Verify Gmail SMTP access, App Password, recipient address, and network connectivity |
+| `ModuleNotFoundError: dotenv` | Install `python-dotenv` or add it to `requirements.txt` |
 
 ## License
 
