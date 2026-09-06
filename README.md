@@ -1,6 +1,6 @@
 # Predictive Maintenance Pipeline
 
-A machine learning-based predictive maintenance system for CNC milling machines that predicts tool wear (VB - flank wear) in real-time and triggers automated alerts when critical thresholds are exceeded.
+A machine learning-based predictive maintenance system for CNC milling machines that predicts tool wear (VB - flank wear) in real time and triggers alerts when the tool requires replacement.
 
 ## Overview
 
@@ -10,9 +10,9 @@ This pipeline monitors 6 sensor channels from a milling machine, extracts statis
 
 - **Real-time Tool Wear Prediction** — Predicts flank wear (VB) in millimeters using a Random Forest Regressor
 - **Failure Probability Estimation** — Classifies damage risk using a Random Forest Classifier
-- **Multi-channel Signal Processing** — Extracts 11 statistical features per channel (mean, std, rms, crest factor, kurtosis, etc.)
-- **Automated Alerting** — Sends email notifications with PDF reports when wear exceeds 0.18 mm or failure probability exceeds 65%
-- **Daily Inference Pipeline** — Scheduled batch processing of daily sensor data
+- **Multi-channel Signal Processing** — Extracts 6 statistical features per channel (std, rms, peak, crest, kurtosis, zero-crossing rate)
+- **Automated Alerting** — Sends email notifications with PDF reports when wear or failure probability exceeds configured thresholds
+- **Daily Inference Pipeline** — Batch processing of daily sensor data via GitHub Actions (manual trigger; cron schedule available but commented out)
 - **Model Versioning** — Trained models exported with full metrics and metadata
 
 ## Dataset
@@ -35,7 +35,7 @@ This project uses the **NASA Milling Wear Dataset**, a public dataset collected 
 
 - The dataset is publicly available for research and educational purposes
 - Raw signals are preprocessed and segmented into daily batches for inference
-- Feature extraction computes 11 statistical descriptors per channel (66 features total)
+- Feature extraction computes 6 statistical descriptors per channel (36 signal features) plus 3 metadata features (DOC, Feed, Material) = **39 features total**
 - Tool wear measurements serve as ground truth for model training and evaluation
 
 ## Architecture
@@ -44,15 +44,15 @@ This project uses the **NASA Milling Wear Dataset**, a public dataset collected 
 
 ```mermaid
 flowchart LR
-    A[📦 NASA Milling Dataset<br/>mill.mat] --> B[🔍 Feature Extraction<br/>69 fitur dari 6 channel sensor]
+    A[📦 NASA Milling Dataset<br/>mill.mat] --> B[🔍 Feature Extraction<br/>39 features: 36 signal + 3 metadata]
     B --> C[🔀 GroupShuffleSplit<br/>by Case_Run]
     C --> D1[🌲 RandomForestRegressor<br/>Predict VB mm]
     C --> D2[🌲 RandomForestClassifier<br/>Failure Probability]
-    
+
     D1 --> E1[📊 MAE · RMSE · R²<br/>Precision · Recall · F1]
     D2 --> E2[📊 AUC · Precision<br/>Recall · F1]
-    
-    E1 --> F[💾 Export Bundle<br/>rf_tool_wear_model.pkl]
+
+    E1 --> F[💾 Export Bundle<br/>random_forest_model.pkl]
     E2 --> F
     
     style A fill:#4a90e2,stroke:#2c5282,color:#fff
@@ -65,19 +65,17 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    START([⏰ GitHub Actions Cron<br/>Daily Trigger]) --> LOAD[📥 Load Model Bundle<br/>rf_tool_wear_model.pkl]
+    START([⚙️ GitHub Actions<br/>Manual Trigger]) --> LOAD[📥 Load Model Bundle<br/>random_forest_model.pkl]
     LOAD --> DATA[📡 Load Daily Sensor Data<br/>6 channel × 9000 samples]
-    DATA --> FE[🔍 Extract Features<br/>69 fitur statistik]
+    DATA --> FE[🔍 Extract Features<br/>39 statistical features]
     FE --> PRED[🤖 Inference<br/>Regressor + Classifier]
     
-    PRED --> DECISION{🎯 Status Decision<br/>VB > 0.18 mm<br/>OR Prob ≥ 65%}
+    PRED --> DECISION{🎯 Status Decision<br/>VB > threshold_mm<br/>OR Prob ≥ alert_prob_threshold}
     
-    DECISION -->|VB ≤ 0.18 & Prob < 65%| NORMAL[✅ NORMAL<br/>Log only]
-    DECISION -->|Prob 55-65%| WARNING[⚠️ WARNING]
-    DECISION -->|VB > 0.18 OR Prob ≥ 65%| CRITICAL[🚨 CRITICAL]
+    DECISION -->|VB ≤ threshold & Prob < alert_prob| NORMAL[✅ NORMAL<br/>Log only]
+    DECISION -->|VB > threshold OR Prob ≥ alert_prob| ALERT[🚨 ALERT<br/>Tool requires replacement]
     
-    WARNING --> REPORT[📄 Generate PDF Report]
-    CRITICAL --> REPORT
+    ALERT --> REPORT[📄 Generate PDF Report]
     
     REPORT --> EMAIL[📧 Send Email Alert<br/>SMTP Gmail + Attachment]
     EMAIL --> DONE([✔️ Pipeline Complete<br/>Save run_summary.json])
@@ -85,8 +83,7 @@ flowchart TD
     
     style START fill:#6b46c1,stroke:#44337a,color:#fff
     style NORMAL fill:#48bb78,stroke:#276749,color:#fff
-    style WARNING fill:#ecc94b,stroke:#975a16,color:#000
-    style CRITICAL fill:#e53e3e,stroke:#9b2c2c,color:#fff
+    style ALERT fill:#e53e3e,stroke:#9b2c2c,color:#fff
     style DONE fill:#48bb78,stroke:#276749,color:#fff
     style DECISION fill:#ed8936,stroke:#c05621,color:#fff
 ```
@@ -130,15 +127,18 @@ predictive-maintenance-pipeline/
 │   ├── mill.mat              # MATLAB training dataset (6 sensor channels)
 │   └── daily/                # Directory for daily sensor data files
 ├── notebooks/
-│   └── model_training.ipynb  # Model training & evaluation notebook
-├── models/
-│   └── random_forest_model.pkl  # Trained model bundle (exported)
+│   ├── model_training.ipynb  # Model training & evaluation notebook
+│   └── models/
+│       └── random_forest_model.pkl  # Trained model bundle (exported)
 ├── src/
+│   ├── alert_system.py        # Email alert system
+│   ├── data_loader.py         # MATLAB .mat data loading
 │   ├── feature_extraction.py  # Signal feature extraction functions
-│   ├── pdf_generator.py       # PDF report generation
-│   └── alert_system.py        # Email alert system
-└── reports/
-    └── *.pdf                   # Generated alert reports
+│   └── pdf_generator.py       # PDF report generation
+├── reports/                  # Generated PDF alert reports
+├── logs/                     # Pipeline logs & run summaries
+└── .github/workflows/
+    └── daily_pipeline.yml    # GitHub Actions cron workflow
 ```
 
 ## Installation
@@ -172,7 +172,7 @@ pip install -r requirements.txt
 | `scipy` | MATLAB file I/O (`scipy.io`) |
 | `scikit-learn` | Random Forest models, metrics |
 | `joblib` | Model serialization |
-| `fpdf` | PDF report generation |
+| `fpdf2` | PDF report generation |
 | `jupyter` / `ipykernel` | Notebook execution |
 
 ## Configuration
@@ -181,16 +181,16 @@ pip install -r requirements.txt
 
 The following environment variables must be set before running the pipeline:
 
-| Variable | Description | Example |
+| Variable | Description | Default |
 |----------|-------------|---------|
-| `MODEL_PATH` | Path to trained model file | `notebooks/models/rf_tool_wear_model.pkl` |
+| `MODEL_PATH` | Path to trained model file | `notebooks/models/random_forest_model.pkl` |
 | `DATA_PATH` | Path to daily sensor data | `data/daily/mill.mat` |
 | `REPORT_DIR` | Output directory for PDF reports | `reports` |
-| `LOG_DIR` | Output directory for logs | `logs` |
-| `SMTP_EMAIL` | Sender Gmail address | `your-email@gmail.com` |
-| `SMTP_PASSWORD` | Gmail App Password | `abcd efgh ijkl mnop` |
-| `ALERT_EMAIL_TO` | Recipient email address | `manager@company.com` |
-| `ALERT_SUBJECT_PREFIX` | Email subject prefix | `[CRITICAL] Tool Wear Alert` |
+| `LOG_DIR` | Output directory for logs & summaries | `logs` |
+| `SMTP_EMAIL` | Sender Gmail address | _(required)_ |
+| `SMTP_PASSWORD` | Gmail App Password | _(required)_ |
+| `ALERT_EMAIL_TO` | Recipient email address | _(required)_ |
+| `ALERT_SUBJECT_PREFIX` | Email subject prefix | `[ALERT] Tool Wear Alert` |
 
 ### Setting Up Email Alerts
 
@@ -226,7 +226,7 @@ Run the Jupyter Notebook to train and evaluate the model:
 jupyter notebook notebooks/model_training.ipynb
 ```
 
-Execute all cells sequentially. The trained model will be saved to `models/random_forest_model.pkl`.
+Execute all cells sequentially. The trained model will be saved to `notebooks/models/random_forest_model.pkl`.
 
 ### Running the Pipeline
 
@@ -240,22 +240,22 @@ python main_pipeline.py
 
 The pipeline will:
 1. Load the trained model
-2. Process daily sensor data
-3. Predict tool wear and failure probability
-4. Determine machine status (NORMAL / WARNING / CRITICAL)
-5. Generate a PDF report if any alert is triggered
-6. Send an email alert for CRITICAL status
+2. Process daily sensor data (most recent run from the .mat file)
+3. Extract 39 features (36 signal + 3 metadata)
+4. Predict tool wear and failure probability
+5. Determine machine status (NORMAL / ALERT)
+6. Generate a PDF report and send an email alert if ALERT status
 
 ### Log Output
 
-Logs are written to both console and `logs/pipeline.log`:
+Logs are written to both console and `logs/pipeline.log`. Run summaries are saved as `logs/run_YYYYMMDD_HHMMSS.json`:
 
 ```
 2026-09-05 08:00:00 [INFO] ==================================================
 2026-09-05 08:00:00 [INFO] Predictive Maintenance Pipeline - START
-2026-09-05 08:00:00 [INFO] Model successfully loaded from notebooks/models/rf_tool_wear_model.pkl
-2026-09-05 08:00:01 [INFO] Machine Status: CRITICAL
-2026-09-05 08:00:01 [INFO] Alert email successfully sent to manager@company.com
+2026-09-05 08:00:00 [INFO] Model successfully loaded from notebooks/models/random_forest_model.pkl
+2026-09-05 08:00:01 [INFO] Machine Status: ALERT
+2026-09-05 08:00:01 [INFO] Alert email successfully sent.
 ```
 
 ## Model Details
@@ -271,38 +271,34 @@ Logs are written to both console and `logs/pipeline.log`:
 | 4 | `ae_table` | Acoustic Emission (Table) |
 | 5 | `ae_spindle` | Acoustic Emission (Spindle) |
 
-### Extracted Features (11 per channel = 66 total)
+### Extracted Features (6 per channel = 36 signal + 3 metadata = 39 total)
 
 Each signal channel produces these statistical features:
 
 | Feature | Formula | Significance |
 |---------|---------|--------------|
-| `mean` | Average amplitude | Baseline signal level |
 | `std` | Standard deviation | Signal variability |
 | `rms` | Root mean square | Power of the signal |
-| `abs_mean` | Mean absolute value | Average magnitude |
 | `peak` | Maximum absolute value | Peak stress indicator |
-| `p2p` | Peak-to-peak | Total signal swing |
 | `crest` | peak / RMS | Impulse detection |
-| `energy` | Mean of squared values | Signal energy |
-| `skew` | Third standardized moment | Asymmetry of distribution |
 | `kurt` | Excess kurtosis | Tail heaviness / outliers |
 | `zero_cross` | Zero-crossing rate | Frequency content |
 
 ### Thresholds
 
-| Parameter | Value | Meaning |
-|-----------|-------|---------|
-| `threshold_mm` | 0.18 mm | Critical flank wear limit |
-| `alert_prob_threshold` | 65% | Failure probability alert level |
+Thresholds are configured at training time and stored in the model bundle. They can be adjusted in the notebook before retraining.
 
-### Status Logic
+| Parameter | Notebook Default | Meaning |
+|-----------|-----------------|---------|
+| `threshold_mm` | 0.4 mm | Tool replacement wear limit |
+| `alert_prob_threshold` | 0.5 (50%) | Failure probability alert level |
+
+### Status Logic (Binary)
 
 | Status | Condition | Action |
 |--------|-----------|--------|
 | **NORMAL** | Wear below threshold AND low failure probability | No action |
-| **WARNING** | Failure probability within 10% of alert threshold | Monitor closely |
-| **CRITICAL** | Wear > 0.18 mm OR failure probability ≥ 65% | Stop machine, replace tool, send alert |
+| **ALERT** | Wear > threshold_mm OR failure probability ≥ alert_prob_threshold | Stop machine, replace tool, send alert |
 
 ## Workflow
 
@@ -316,7 +312,7 @@ Cell 4: Load Dataset              → Parse MATLAB .mat, extract features from a
 Cell 5: Data Split                → GroupShuffleSplit (80/20), column alignment
 Cell 6: Train Regressor           → RandomForestRegressor (n=700, depth=14)
 Cell 7: Regression Evaluation     → MAE, RMSE, R²
-Cell 8: Crisis Threshold Eval     → Precision, Recall, F1 at 0.18 mm
+Cell 8: Alert Threshold Eval      → Precision, Recall, F1 at 0.4 mm
 Cell 9: Train Classifier          → RandomForestClassifier for failure probability
 Cell 10: Export Model             → Save bundle with metrics to .pkl
 ```
@@ -326,11 +322,11 @@ Cell 10: Export Model             → Save bundle with metrics to .pkl
 ```
 Step 1: Load Model               → Validate bundle completeness
 Step 2: Load Daily Data          → Read sensor signals from .mat file
-Step 3: Extract Features         → 66 features from 6 channels
+Step 3: Extract Features         → 39 features from 6 channels + metadata
 Step 4: Predict                  → Regressor → VB (mm), Classifier → probability
-Step 5: Status Decision          → NORMAL / WARNING / CRITICAL
-Step 6: Generate Report          → PDF with prediction details
-Step 7: Send Alert               → Email with PDF attachment (if CRITICAL)
+Step 5: Status Decision          → NORMAL / ALERT
+Step 6: Generate Report          → PDF with prediction details (if ALERT)
+Step 7: Send Alert               → Email with PDF attachment (if ALERT)
 ```
 
 ## Troubleshooting

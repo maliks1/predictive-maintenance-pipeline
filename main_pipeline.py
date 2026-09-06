@@ -1,14 +1,14 @@
 # main_pipeline.py
 """
 Automated Predictive Maintenance Pipeline
-Daily inference + reporting + email alert.
+Daily inference + HTML email alert (Binary System).
 """
 
 import json
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import joblib
@@ -23,7 +23,6 @@ if str(SRC_DIR) not in sys.path:
 from alert_system import send_email_alert
 from data_loader import load_daily_sensor_data
 from feature_extraction import extract_features_from_signals
-from pdf_generator import generate_pdf_report
 
 # ==================================================
 # 1. CONFIGURATION
@@ -31,9 +30,7 @@ from pdf_generator import generate_pdf_report
 # Path (can be overridden via env)
 MODEL_PATH = Path(os.getenv("MODEL_PATH", "notebooks/models/random_forest_model.pkl"))
 DATA_PATH = Path(os.getenv("DATA_PATH", "data/daily/mill.mat"))
-REPORT_DIR = Path(os.getenv("REPORT_DIR", "reports"))
 LOG_DIR = Path(os.getenv("LOG_DIR", "logs"))
-REPORT_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # ==================================================
@@ -48,12 +45,6 @@ logging.basicConfig(
     ],
 )
 log = logging.getLogger("main_pipeline")
-
-# Email (required from env / GitHub Secrets)
-SMTP_EMAIL = os.getenv("SMTP_EMAIL")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
-ALERT_EMAIL_TO = os.getenv("ALERT_EMAIL_TO")
-ALERT_SUBJECT_PREFIX = os.getenv("ALERT_SUBJECT_PREFIX", "[CRITICAL] Tool Wear Alert")
 
 # ==================================================
 # 3. LOAD MODEL
@@ -87,47 +78,57 @@ def prepare_feature_row(features: dict, feature_columns: list) -> pd.DataFrame:
     df = df[feature_columns]
     # Clean inf values
     df = df.replace([np.inf, -np.inf], np.nan)
-    return df.astype(np.float64)
+    return df.astype(np.float64) # type: ignore
 
 # ==================================================
 # 5. INFERENCE
 # ==================================================
-def run_inference(X: pd.DataFrame, bundle: dict) -> dict:
+def run_inference(X: pd.DataFrame, bundle: dict, raw_features: dict) -> dict:
     regressor = bundle["regressor"]
     classifier = bundle["classifier"]
     threshold_mm = bundle["threshold_mm"]
     alert_prob = bundle["alert_prob_threshold"]
+    feature_columns = bundle["feature_columns"]
 
     predicted_vb = float(regressor.predict(X)[0])
 
-    prob_failure = np.nan
+    prob_failure = 0.0
     if classifier is not None:
         prob_failure = float(classifier.predict_proba(X)[0][1])
 
-    is_critical_vb = predicted_vb > threshold_mm
-    is_high_prob = (not np.isnan(prob_failure)) and (prob_failure >= alert_prob)
-    is_alert = is_critical_vb or is_high_prob
+    is_vb_over_threshold = predicted_vb > threshold_mm
+    is_high_prob = prob_failure >= alert_prob
+    is_alert = is_vb_over_threshold or is_high_prob
+
+    # Extract top 5 features based on regressor importance for the HTML email report
+    top_features = {}
+    try:
+        importances = regressor.named_steps['rf'].feature_importances_
+        top_idx = np.argsort(importances)[-5:][::-1]
+        top_features = {
+            feature_columns[i]: float(raw_features.get(feature_columns[i], 0.0))
+            for i in top_idx
+        }
+    except (KeyError, ValueError, AttributeError) as e:
+            log.warning(f"Could not extract top features: {e}")
 
     return {
         "predicted_vb_mm": round(predicted_vb, 4),
-        "failure_probability": round(prob_failure, 4) if not np.isnan(prob_failure) else None,
+        "failure_probability": round(prob_failure, 4),
         "threshold_mm": threshold_mm,
         "alert_prob_threshold": alert_prob,
-        "is_critical_vb": bool(is_critical_vb),
+        "is_vb_over_threshold": bool(is_vb_over_threshold),
         "is_high_prob": bool(is_high_prob),
         "is_alert": bool(is_alert),
+        "top_features": top_features,
     }
 
 # ==================================================
-# 6. STATUS DECISION
+# 6. STATUS DECISION (Binary)
 # ==================================================
 def determine_status(result: dict) -> str:
-    if result["is_alert"]:
-        return "CRITICAL"
-    prob = result["failure_probability"]
-    if prob is not None and prob >= result["alert_prob_threshold"] - 0.10:
-        return "WARNING"
-    return "NORMAL"
+    """Binary status: ALERT if tool requires replacement, else NORMAL."""
+    return "ALERT" if result["is_alert"] else "NORMAL"
 
 # ==================================================
 # 7. MAIN PIPELINE
@@ -137,14 +138,13 @@ def main() -> int:
     log.info("Predictive Maintenance Pipeline - START")
     log.info("=" * 50)
 
-    timestamp = datetime.now()
+    timestamp = datetime.now(tz=timezone.utc)
     run_summary = {
         "timestamp": timestamp.isoformat(),
         "data_path": str(DATA_PATH),
         "model_path": str(MODEL_PATH),
         "status": "UNKNOWN",
         "alert_sent": False,
-        "pdf_path": None,
         "error": None,
     }
 
@@ -163,7 +163,7 @@ def main() -> int:
         log.info(f"Features ready: {X.shape[1]} columns")
 
         # 4. Inference
-        result = run_inference(X, bundle)
+        result = run_inference(X, bundle, features)
         status = determine_status(result)
         result["status"] = status
         result["run_id"] = metadata.get("run_id", "unknown")
@@ -173,38 +173,24 @@ def main() -> int:
         log.info(f"Failure Prob : {result['failure_probability']}")
         log.info(f"Status       : {status}")
 
-        # 5. If critical / warning -> generate PDF & send email
-        if status in ("CRITICAL", "WARNING"):
-            pdf_data = {
-                "timestamp": result["timestamp"],
-                "run_id": result["run_id"],
-                "predicted_vb": result["predicted_vb_mm"],
-                "threshold": result["threshold_mm"],
-                "probability": result["failure_probability"] or 0.0,
-                "status": status,
+        # 5. If ALERT -> send HTML email (Binary logic: only ALERT triggers email)
+        if status == "ALERT":
+            prediction_payload = {
+                "vb_mm": result["predicted_vb_mm"],
+                "probability": result["failure_probability"],
+                "threshold_mm": result["threshold_mm"],
+                "alert_prob_threshold": result["alert_prob_threshold"],
+                "top_features": result["top_features"],
             }
-            pdf_path = generate_pdf_report(pdf_data, REPORT_DIR)
-            result["pdf_path"] = str(pdf_path)
-            log.info(f"PDF report created: {pdf_path}")
 
-            if SMTP_EMAIL and SMTP_PASSWORD and ALERT_EMAIL_TO:
-                subject = f"{ALERT_SUBJECT_PREFIX} - {status} - {timestamp:%Y-%m-%d %H:%M}"
-                body = (
-                    f"Machine Status: {status}\n"
-                    f"Timestamp: {timestamp.isoformat()}\n"
-                    f"Predicted VB: {result['predicted_vb_mm']} mm "
-                    f"(threshold: {result['threshold_mm']} mm)\n"
-                    f"Failure Probability: {result['failure_probability']}\n\n"
-                    f"Full details attached in PDF."
-                )
-                send_email_alert(subject, body, pdf_path)
-                run_summary["alert_sent"] = True
-                log.info("Alert email successfully sent.")
+            # alert_system.py akan otomatis handle skip jika credentials tidak ada
+            email_sent = send_email_alert(prediction_payload, status)
+            run_summary["alert_sent"] = email_sent
+
+            if email_sent:
+                log.info("Alert HTML email successfully sent.")
             else:
-                log.warning(
-                    "SMTP_EMAIL / SMTP_PASSWORD / ALERT_EMAIL_TO not set. "
-                    "Email alert skipped."
-                )
+                log.warning("Email alert skipped or failed (check credentials).")
         else:
             log.info("Status NORMAL, no alert needed.")
 
@@ -212,11 +198,10 @@ def main() -> int:
             "status": status,
             "predicted_vb_mm": result["predicted_vb_mm"],
             "failure_probability": result["failure_probability"],
-            "pdf_path": result.get("pdf_path"),
         })
 
     except Exception as e:
-        log.exception(f"Pipeline failed: {e}")
+        log.exception("Pipeline failed:")
         run_summary["status"] = "FAILED"
         run_summary["error"] = str(e)
 
